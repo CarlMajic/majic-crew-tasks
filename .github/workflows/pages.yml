@@ -1,0 +1,45 @@
+name: Publish Crew Tasks
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - name: Configure the shared task server
+        env:
+          MAJIC_API_ORIGIN: ${{ vars.MAJIC_API_ORIGIN }}
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const configured = process.env.MAJIC_API_ORIGIN?.trim();
+          const origin = configured ? new URL(configured).origin : '';
+          if (configured && (!origin.startsWith('https://') || ![origin,origin+'/'].includes(configured))) {
+            throw new Error('MAJIC_API_ORIGIN must be an HTTPS origin.');
+          }
+          const path = 'public/index.html';
+          const csp = `default-src 'self'; connect-src ${origin || "'none'"}; base-uri 'none'; form-action 'self'`;
+          writeFileSync(path, readFileSync(path,'utf8').replace('<head>', () =>
+            `<head>\n<meta name="majic-api" content="${origin}">\n<meta http-equiv="Content-Security-Policy" content="${csp}">`));
+          JS
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: public
+      - uses: actions/deploy-pages@v4
+        id: deploy
