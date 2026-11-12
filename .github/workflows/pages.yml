@@ -22,21 +22,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
-      - name: Configure the shared task server
+      - name: Configure workspace storage
         env:
           MAJIC_API_ORIGIN: ${{ vars.MAJIC_API_ORIGIN }}
+          MAJIC_GOOGLE_CLIENT_ID: ${{ vars.MAJIC_GOOGLE_CLIENT_ID }}
         run: |
           node --input-type=module <<'JS'
           import { readFileSync, writeFileSync } from 'node:fs';
           const configured = process.env.MAJIC_API_ORIGIN?.trim();
+          const google = process.env.MAJIC_GOOGLE_CLIENT_ID?.trim() || '';
           const origin = configured ? new URL(configured).origin : '';
+          if (google && !/^[a-zA-Z0-9-]+\.apps\.googleusercontent\.com$/.test(google)) {
+            throw new Error('MAJIC_GOOGLE_CLIENT_ID must be a Google OAuth Web client ID.');
+          }
+          if (google && origin) throw new Error('Configure one storage provider for this deployment.');
           if (configured && (!origin.startsWith('https://') || ![origin,origin+'/'].includes(configured))) {
             throw new Error('MAJIC_API_ORIGIN must be an HTTPS origin.');
           }
           const path = 'public/index.html';
-          const csp = `default-src 'self'; connect-src ${origin || "'none'"}; base-uri 'none'; form-action 'self'`;
+          const provider = origin ? `<meta name="majic-api" content="${origin}">` :
+            `<meta name="majic-google-client" content="${google}">`;
+          const csp = "default-src 'self'; base-uri 'none'; form-action 'self'; " + (google ?
+            "script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' https://accounts.google.com/gsi/style; frame-src https://accounts.google.com/gsi/; connect-src https://accounts.google.com/gsi/ https://sheets.googleapis.com https://www.googleapis.com" :
+            "connect-src " + (origin || "'none'"));
           writeFileSync(path, readFileSync(path,'utf8').replace('<head>', () =>
-            `<head>\n<meta name="majic-api" content="${origin}">\n<meta http-equiv="Content-Security-Policy" content="${csp}">`));
+            `<head>\n${provider}\n<meta http-equiv="Content-Security-Policy" content="${csp}">`));
           JS
       - uses: actions/upload-pages-artifact@v4
         with:

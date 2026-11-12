@@ -7,7 +7,10 @@ const eventTabs = document.querySelector('#event-tabs');
 const query = new URLSearchParams(location.search);
 const homeUrl = new URL('./', location.href);
 const apiOrigin = document.querySelector('meta[name="majic-api"]')?.content;
-const hosted = apiOrigin !== undefined;
+const googleClient = document.querySelector('meta[name="majic-google-client"]')?.content;
+const solo = googleClient !== undefined;
+const hosted = apiOrigin !== undefined || solo;
+let workspace;
 const sessionKey = 'majic-session:' + homeUrl.pathname + ':' + apiOrigin;
 let invitation = query.get('invite');
 let user, eventId, board, stream, tab, toastTimer;
@@ -42,6 +45,7 @@ function dateLabel(event) {
     .filter(Boolean).map(escape).join(' · ');
 }
 async function api(path, data) {
+  if (solo) return workspace.api(path,data);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10000);
   try {
@@ -108,9 +112,19 @@ function showDialog(title, fields, submit, label = 'Save', extra = '') {
   });
 }
 function renderIdentity() {
+  if (solo) {
+    profile.innerHTML = user ? button('Connect Google','google-connect','ghost') : '';
+    return;
+  }
   profile.innerHTML = user ? `<div class="identity" title="${escape(user.name)}"><span class="avatar">${escape(user.name.slice(0,2).toUpperCase())}</span><span class="display-name">${escape(user.name)}</span></div>` : '';
 }
 function renderSignin() {
+  if (solo) {
+    app.innerHTML = `<section class="panel welcome"><div class="title"><h1>Crew workspace</h1>
+      <p class="muted">Use the same Google account on your computer and phone to open your private task boards.</p></div>
+      ${button('Connect Google','google-connect','primary')}</section>`;
+    return;
+  }
   app.innerHTML = `<section class="panel welcome">
     <div class="title"><p class="eyebrow">Majic Productions</p><h1>${invitation ? 'Join the crew' : 'Crew workspace'}</h1>
     <p class="muted">${invitation ? 'Enter the name your crew knows you by to open the event board.' : 'Enter your name to create an event or join from an invitation link.'}</p></div>
@@ -288,7 +302,7 @@ function renderSettings() {
     <p class="muted">${dateLabel(event) || 'No location or dates entered.'}</p>
     ${manager ? `<div>${button(event.archived ? 'Restore Event' : 'Archive Event','archive','ghost')}</div>` : ''}
     </section><section class="panel stack"><div class="row wrap"><h2>Participants</h2>
-    ${editable ? button('Create Invite Link','invite','primary') : ''}</div>
+    ${editable && !solo ? button('Create Invite Link','invite','primary') : ''}</div>
     ${members.map(member => `<div class="setting-row row"><span>${escape(member.name)} <span class="muted small">${member.role === 'manager' ? '· Manager' : ''}</span></span>
       ${editable && member.role === 'crew' ? button('Remove','remove','ghost danger',member.id) : ''}</div>`).join('')}</section>
     <section class="panel stack"><div class="row wrap"><h2>Categories</h2>${event.archived ? '' : button('+ Add Category','new-category')}</div>
@@ -325,7 +339,7 @@ function connect(target) {
       } finally {
         pending = false;
       }
-    },4000);
+    },solo ? 10000 : 4000);
     stream = {close: () => clearInterval(timer), readyState:EventSource.OPEN};
     paintLive(true);
     return;
@@ -428,6 +442,18 @@ document.addEventListener('click',async event => {
   const target = eventId;
   try {
     if (action === 'close') dialog.close();
+    if (action === 'google-connect' || action === 'google-create') {
+      control.disabled = true;
+      const {found} = await workspace.connect(action === 'google-create');
+      if (!found) {
+        showDialog('Create your workspace',`<div class="stack"><p class="muted">Create a private Google Sheet to save your jobs and tasks.</p>
+          ${button('Create Workspace','google-create','primary')}</div>`);
+      } else {
+        ({user} = await api('me'));
+        renderIdentity();
+        await route();
+      }
+    }
     if (action === 'retry') await route();
     if (action === 'tab') {tab = key; renderBoard();}
     if (action === 'status') {
@@ -533,7 +559,12 @@ app.addEventListener('submit',async event => {
 window.addEventListener('hashchange',route);
 async function start() {
   try {
-    if (hosted && !apiOrigin) throw new Error('The shared task server has not been connected yet.');
+    if (solo) {
+      if (!googleClient) throw new Error('Google sign-in has not been configured yet.');
+      const {createSheetWorkspace} = await import('./sheets.mjs');
+      workspace = createSheetWorkspace(googleClient);
+      await workspace.load();
+    } else if (hosted && !apiOrigin) throw new Error('The shared task server has not been connected yet.');
     ({user} = await api('me'));
     renderIdentity();
     if (user && invitation) await join();
